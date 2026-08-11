@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: meteo_db
+    environment:
+      POSTGRES_DB: meteo_db
+      POSTGRES_USER: meteo_user
+      POSTGRES_PASSWORD: meteo_password_secure_2026
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: meteo_backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://meteo_user:meteo_password_secure_2026@db:5432/meteo_db
+    ports:
+      - "8088:8000"
+    depends_on:
+      - db
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: meteo_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  postgres_data:
