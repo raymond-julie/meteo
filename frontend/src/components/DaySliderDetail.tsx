@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DailyDetailResponse, BlockDetail } from '../types/meteo';
+import { API_BASE_URL } from '../config';
 import { Sun, Cloud, CloudRain, Wind, Waves, Thermometer, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 
 interface DaySliderDetailProps {
@@ -20,7 +21,7 @@ export const DaySliderDetail: React.FC<DaySliderDetailProps> = ({
   useEffect(() => {
     if (!selectedDate) return;
     setIsLoading(true);
-    fetch(`/api/v1/forecast/daily/${selectedDate}`)
+    fetch(`${API_BASE_URL}/api/v1/forecast/daily/${selectedDate}`)
       .then((res) => res.json())
       .then((data) => {
         setDetailData(data);

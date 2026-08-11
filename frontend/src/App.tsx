@@ -3,6 +3,7 @@ import { Navbar } from './components/Navbar';
 import { VacationOverview } from './components/VacationOverview';
 import { DaySliderDetail } from './components/DaySliderDetail';
 import { VacationSummaryItem } from './types/meteo';
+import { API_BASE_URL } from './config';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<'overview' | 'slider'>('overview');
@@ -14,7 +15,7 @@ export function App() {
 
   const fetchSummary = async () => {
     try {
-      const res = await fetch('/api/v1/forecast/summary');
+      const res = await fetch(`${API_BASE_URL}/api/v1/forecast/summary`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
@@ -33,13 +34,13 @@ export function App() {
     fetchSummary();
     const interval = setInterval(() => {
       fetchSummary();
-    }, 2000);
+    }, 2500);
     return () => clearInterval(interval);
   }, []);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    fetch('/api/v1/ingest/refresh', { method: 'POST' })
+    fetch(`${API_BASE_URL}/api/v1/ingest/refresh`, { method: 'POST' })
       .then(() => {
         setTimeout(() => {
           fetchSummary();
