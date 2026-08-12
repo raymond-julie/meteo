@@ -39,12 +39,17 @@ async def health_check():
 
 @app.get("/api/v1/forecast/summary")
 async def get_vacation_summary(db: AsyncSession = Depends(get_db)):
-    stmt = select(AggregatedForecast).where(AggregatedForecast.time_block == "Journée").order_by(AggregatedForecast.date_str)
+    stmt = select(AggregatedForecast).where(AggregatedForecast.time_block == "Journée").order_by(AggregatedForecast.date_str, AggregatedForecast.id.desc())
     res = await db.execute(stmt)
     records = res.scalars().all()
 
+    seen_dates = set()
     summary_list = []
     for r in records:
+        if r.date_str in seen_dates:
+            continue
+        seen_dates.add(r.date_str)
+
         bar_len = r.vacation_score
         bar_visual = "█" * bar_len + "░" * (10 - bar_len)
         summary_list.append({
@@ -58,6 +63,7 @@ async def get_vacation_summary(db: AsyncSession = Depends(get_db)):
             "rating": r.vacation_rating,
             "confidence": r.confidence
         })
+    summary_list.sort(key=lambda x: x["date"])
     return summary_list
 
 @app.get("/api/v1/forecast/daily/{date_str}")
