@@ -1,17 +1,30 @@
 import React, { useState } from 'react';
-import { VacationSummaryItem } from '../types/meteo';
-import { Sun, Waves, Star, Cloud, Info, X, CheckCircle2 } from 'lucide-react';
+import { VacationSummaryItem, LocationInfo } from '../types/meteo';
+import { Sun, Waves, Star, Cloud, Info, X, CheckCircle2, MapPin } from 'lucide-react';
 
 interface VacationOverviewProps {
   summary: VacationSummaryItem[];
   onSelectDay: (date: string) => void;
+  selectedLocation: string;
+  locations: LocationInfo[];
 }
 
 export const VacationOverview: React.FC<VacationOverviewProps> = ({
   summary,
-  onSelectDay
+  onSelectDay,
+  selectedLocation,
+  locations
 }) => {
   const [showRulesModal, setShowRulesModal] = useState<boolean>(false);
+
+  const locInfo = locations.find(l => l.id === selectedLocation) || {
+    id: "soustons-plage",
+    name: "Soustons-Plage",
+    region: "Littoral Atlantique • Landes",
+    lat: 43.78,
+    lon: -1.41,
+    avg_sea_temp: 23.8
+  };
 
   const avgScore = summary.length > 0 
     ? (summary.reduce((acc, s) => acc + s.score, 0) / summary.length).toFixed(1)
@@ -24,8 +37,10 @@ export const VacationOverview: React.FC<VacationOverviewProps> = ({
     return isDryAndSunny;
   }).length;
 
+  const isAtlantique = selectedLocation === 'soustons-plage';
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       
       {/* Rules Explanation Modal */}
       {showRulesModal && (
@@ -87,6 +102,28 @@ export const VacationOverview: React.FC<VacationOverviewProps> = ({
         </div>
       )}
 
+      {/* Location Banner Title */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="p-3 bg-sky-50 rounded-xl border border-sky-200">
+            <MapPin className="w-6 h-6 text-sky-600" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-extrabold text-slate-900">{locInfo.name}</h2>
+              <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
+                isAtlantique ? 'bg-sky-100 text-sky-800' : 'bg-amber-100 text-amber-900'
+              }`}>
+                {locInfo.region}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 font-medium mt-0.5">
+              Bulletin Quinzaine 16 → 30 août 2026 • Coordonnées : {locInfo.lat}°N, {locInfo.lon}°E
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         
@@ -145,21 +182,25 @@ export const VacationOverview: React.FC<VacationOverviewProps> = ({
           </div>
         </div>
 
-        {/* Ocean SST Card */}
+        {/* Ocean / Sea SST Card */}
         <div className="glass-card p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
           <div className="p-3.5 bg-teal-50 border border-teal-200 rounded-2xl">
             <Waves className="w-7 h-7 text-teal-600" />
           </div>
           <div>
             <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              T° Eau de Mer Océane
+              T° Eau de Mer {isAtlantique ? 'Océane' : 'Méditerranéenne'}
             </p>
             <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-3xl font-extrabold text-slate-900">23.8°C</span>
-              <span className="text-xs text-teal-700 font-bold">Baignade Douce</span>
+              <span className="text-3xl font-extrabold text-slate-900">
+                {isAtlantique ? '23.8°C' : '25.2°C'}
+              </span>
+              <span className="text-xs text-teal-700 font-bold">
+                {isAtlantique ? 'Baignade Douce' : 'Baignade Chaude'}
+              </span>
             </div>
             <p className="text-xs text-slate-600 font-bold mt-0.5">
-              Moyenne sur la période (16-30 août) • Copernicus
+              Moyenne période (16-30 août) • Copernicus
             </p>
           </div>
         </div>
@@ -175,11 +216,11 @@ export const VacationOverview: React.FC<VacationOverviewProps> = ({
               <Sun className="w-5 h-5 text-amber-500" /> Visualisation Globale de la Quinzaine (16 → 30 août)
             </h2>
             <p className="text-xs text-slate-500 font-medium mt-1">
-              Jauges d'ensoleillement, couverture nuageuse et indice UV max à Soustons-Plage.
+              Jauges d'ensoleillement, couverture nuageuse et indice UV max pour {locInfo.name}.
             </p>
           </div>
           <span className="text-xs bg-slate-100 text-slate-700 px-3 py-1 rounded-full border border-slate-200 font-mono font-semibold">
-            Soustons-Plage (43.78°N, -1.41°W)
+            {locInfo.name} ({locInfo.lat}°N, {locInfo.lon}°E)
           </span>
         </div>
 
@@ -201,7 +242,7 @@ export const VacationOverview: React.FC<VacationOverviewProps> = ({
               {summary.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-slate-500 font-semibold">
-                    Initialisation des données météo en cours...
+                    Chargement des prévisions pour {locInfo.name}...
                   </td>
                 </tr>
               ) : (

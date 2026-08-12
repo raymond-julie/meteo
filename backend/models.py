@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Float, DateTime
 from database import Base
 import datetime
 
@@ -9,8 +9,9 @@ class WeatherRecord(Base):
     timestamp = Column(DateTime, index=True)
     date_str = Column(String, index=True) # e.g. "2026-08-16"
     hour = Column(Integer)
-    model_source = Column(String, index=True) # e.g. "ecmwf", "gfs", "marine", "climato"
-    location = Column(String, default="Soustons-Plage")
+    model_source = Column(String, index=True) # e.g. "ecmwf", "gfs", "icon", "meteofrance"
+    location_id = Column(String, index=True, default="soustons-plage")
+    location_name = Column(String, default="Soustons-Plage")
     
     temperature = Column(Float, nullable=True)
     apparent_temperature = Column(Float, nullable=True)
@@ -25,6 +26,8 @@ class AggregatedForecast(Base):
     __tablename__ = "aggregated_forecasts"
 
     id = Column(Integer, primary_key=True, index=True)
+    location_id = Column(String, index=True, default="soustons-plage")
+    location_name = Column(String, default="Soustons-Plage")
     date_str = Column(String, index=True)
     day_label = Column(String)
     time_block = Column(String, index=True) # "Matin", "Après-midi", "Soir", "Journée"

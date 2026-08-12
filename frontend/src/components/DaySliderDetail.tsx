@@ -1,27 +1,37 @@
 import React, { useState, useEffect } from 'react';
-import { DailyDetailResponse, BlockDetail } from '../types/meteo';
+import { DailyDetailResponse, BlockDetail, LocationInfo } from '../types/meteo';
 import { API_BASE_URL } from '../config';
-import { Sun, Cloud, CloudRain, Wind, Waves, Thermometer, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
+import { Sun, Cloud, CloudRain, Wind, Waves, Thermometer, ChevronLeft, ChevronRight, Sparkles, MapPin } from 'lucide-react';
 
 interface DaySliderDetailProps {
   dates: string[];
   selectedDate: string;
   onSelectDate: (date: string) => void;
+  selectedLocation: string;
+  locations: LocationInfo[];
 }
 
 export const DaySliderDetail: React.FC<DaySliderDetailProps> = ({
   dates,
   selectedDate,
-  onSelectDate
+  onSelectDate,
+  selectedLocation,
+  locations
 }) => {
   const [detailData, setDetailData] = useState<DailyDetailResponse | null>(null);
   const [activeBlock, setActiveBlock] = useState<'Matin' | 'Après-midi' | 'Soir'>('Après-midi');
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
+  const locInfo = locations.find(l => l.id === selectedLocation) || {
+    id: "soustons-plage",
+    name: "Soustons-Plage",
+    region: "Littoral Atlantique • Landes"
+  };
+
   useEffect(() => {
     if (!selectedDate) return;
     setIsLoading(true);
-    fetch(`${API_BASE_URL}/api/v1/forecast/daily/${selectedDate}`)
+    fetch(`${API_BASE_URL}/api/v1/forecast/daily/${selectedDate}?location=${selectedLocation}`)
       .then((res) => res.json())
       .then((data) => {
         setDetailData(data);
@@ -31,7 +41,7 @@ export const DaySliderDetail: React.FC<DaySliderDetailProps> = ({
         console.error("Failed to fetch daily detail", err);
         setIsLoading(false);
       });
-  }, [selectedDate]);
+  }, [selectedDate, selectedLocation]);
 
   const currentIndex = dates.indexOf(selectedDate);
 
@@ -50,7 +60,7 @@ export const DaySliderDetail: React.FC<DaySliderDetailProps> = ({
   const currentBlockDetail: BlockDetail | undefined = detailData?.blocks[activeBlock];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       
       {/* Date Carousel Slider Header */}
       <div className="glass-card rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-6">
@@ -68,8 +78,8 @@ export const DaySliderDetail: React.FC<DaySliderDetailProps> = ({
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900">
               {detailData?.day_label || selectedDate}
             </h2>
-            <p className="text-xs text-sky-600 font-bold mt-0.5">
-              Soustons-Plage (Littoral Océanique)
+            <p className="text-xs text-sky-600 font-bold mt-0.5 flex items-center justify-center gap-1">
+              <MapPin className="w-3.5 h-3.5" /> {locInfo.name} ({locInfo.region})
             </p>
           </div>
 
@@ -127,7 +137,7 @@ export const DaySliderDetail: React.FC<DaySliderDetailProps> = ({
       {isLoading ? (
         <div className="text-center py-12 glass-card rounded-2xl border border-slate-200 shadow-sm">
           <div className="animate-spin w-8 h-8 border-4 border-sky-500 border-t-transparent rounded-full mx-auto mb-3" />
-          <p className="text-sm text-slate-600 font-bold">Chargement des données météo détaillées...</p>
+          <p className="text-sm text-slate-600 font-bold">Chargement des données météo détaillées pour {locInfo.name}...</p>
         </div>
       ) : currentBlockDetail ? (
         <div className="space-y-6">
@@ -140,7 +150,7 @@ export const DaySliderDetail: React.FC<DaySliderDetailProps> = ({
               </div>
               <div>
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Indice Vacances ({activeBlock})
+                  Indice Vacances ({activeBlock}) • {locInfo.name}
                 </span>
                 <h3 className="text-2xl font-extrabold text-slate-900 mt-0.5">
                   {currentBlockDetail.vacation_rating}
@@ -229,7 +239,7 @@ export const DaySliderDetail: React.FC<DaySliderDetailProps> = ({
                 <Waves className="w-4 h-4 text-teal-600" />
               </div>
               <div className="text-2xl font-extrabold text-teal-700">{currentBlockDetail.sea_temperature}°C</div>
-              <div className="text-xs text-slate-500 mt-1 font-semibold">Baignade & Surf Soustons-Plage</div>
+              <div className="text-xs text-slate-500 mt-1 font-semibold">Baignade {locInfo.name}</div>
             </div>
 
           </div>

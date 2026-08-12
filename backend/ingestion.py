@@ -6,8 +6,22 @@ from database import AsyncSessionLocal
 from models import WeatherRecord, AggregatedForecast
 from sqlalchemy import select, delete
 
-LATITUDE = 43.78
-LONGITUDE = -1.41
+LOCATIONS = {
+    "soustons-plage": {
+        "id": "soustons-plage",
+        "name": "Soustons-Plage",
+        "region": "Littoral Atlantique • Landes",
+        "lat": 43.78,
+        "lon": -1.41
+    },
+    "canet-plage": {
+        "id": "canet-plage",
+        "name": "Canet-en-Roussillon-Plage",
+        "region": "Littoral Méditerranéen • Pyrénées-Orientales",
+        "lat": 42.69,
+        "lon": 3.01
+    }
+}
 
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 OPEN_METEO_MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
@@ -22,13 +36,12 @@ MODEL_WEIGHTS = {
     "meteofrance": 0.10
 }
 
-# Mutex lock to prevent parallel ingestion tasks
 ingestion_lock = asyncio.Lock()
 
-async def fetch_all_models_forecast():
+async def fetch_all_models_forecast(lat: float, lon: float):
     params = {
-        "latitude": LATITUDE,
-        "longitude": LONGITUDE,
+        "latitude": lat,
+        "longitude": lon,
         "hourly": "temperature_2m,apparent_temperature,precipitation,cloud_cover,wind_speed_10m,uv_index",
         "timezone": "Europe/Paris",
         "forecast_days": 16,
@@ -40,10 +53,10 @@ async def fetch_all_models_forecast():
             return resp.json()
     return None
 
-async def fetch_marine_data():
+async def fetch_marine_data(lat: float, lon: float):
     params = {
-        "latitude": LATITUDE,
-        "longitude": LONGITUDE,
+        "latitude": lat,
+        "longitude": lon,
         "hourly": "sea_surface_temperature",
         "timezone": "Europe/Paris",
         "forecast_days": 16
@@ -54,14 +67,14 @@ async def fetch_marine_data():
             return resp.json()
     return None
 
-async def fetch_climatology_data():
+async def fetch_climatology_data(lat: float, lon: float):
     years = [2021, 2022, 2023, 2024, 2025]
     clim_records = []
     async with httpx.AsyncClient(timeout=20.0) as client:
         for yr in years:
             params = {
-                "latitude": LATITUDE,
-                "longitude": LONGITUDE,
+                "latitude": lat,
+                "longitude": lon,
                 "start_date": f"{yr}-08-16",
                 "end_date": f"{yr}-08-30",
                 "hourly": "temperature_2m,apparent_temperature,precipitation,cloud_cover,wind_speed_10m",
@@ -73,7 +86,7 @@ async def fetch_climatology_data():
     return clim_records
 
 def calculate_effective_uv(cloud_cover, rain_mm, is_afternoon=True):
-    base_uv = 7.2 if is_afternoon else 4.0
+    base_uv = 7.5 if is_afternoon else 4.0
     c_pct = cloud_cover if cloud_cover is not None else 30.0
     r_mm = rain_mm if rain_mm is not None else 0.0
 
@@ -137,221 +150,224 @@ async def run_full_ingestion_and_aggregation():
         return
 
     async with ingestion_lock:
-        print("🚀 Ingesting & Computing Weighted Ensemble (ECMWF 60%, GFS 20%, ICON 10%, Météo-France 10%)...")
-
-        multi_raw = await fetch_all_models_forecast()
-        marine_raw = await fetch_marine_data()
-        clim_raw = await fetch_climatology_data()
+        print("🚀 Starting Multi-Location Ingestion (Soustons-Plage & Canet-en-Roussillon-Plage)...")
 
         async with AsyncSessionLocal() as session:
-            # Wipe existing records cleanly
             await session.execute(delete(WeatherRecord))
             await session.execute(delete(AggregatedForecast))
             await session.commit()
 
-            records_to_add = []
+            all_raw_records = []
+            all_aggregated_records = []
 
-            if multi_raw and 'hourly' in multi_raw:
-                h = multi_raw['hourly']
-                time_list = h.get('time', [])
+            for loc_id, loc_info in LOCATIONS.items():
+                print(f"📍 Processing location: {loc_info['name']} (lat: {loc_info['lat']}, lon: {loc_info['lon']})")
+                
+                multi_raw = await fetch_all_models_forecast(loc_info['lat'], loc_info['lon'])
+                marine_raw = await fetch_marine_data(loc_info['lat'], loc_info['lon'])
+                clim_raw = await fetch_climatology_data(loc_info['lat'], loc_info['lon'])
 
-                for m_key in MODELS:
-                    m_short = m_key.split("_")[0]
-                    t_col = f"temperature_2m_{m_key}"
-                    app_col = f"apparent_temperature_{m_key}"
-                    precip_col = f"precipitation_{m_key}"
-                    cloud_col = f"cloud_cover_{m_key}"
-                    wind_col = f"wind_speed_10m_{m_key}"
-                    uv_col = f"uv_index_{m_key}"
+                if multi_raw and 'hourly' in multi_raw:
+                    h = multi_raw['hourly']
+                    time_list = h.get('time', [])
 
-                    if t_col in h:
-                        for i, t_str in enumerate(time_list):
-                            dt = datetime.datetime.fromisoformat(t_str)
-                            records_to_add.append(WeatherRecord(
-                                timestamp=dt,
-                                date_str=dt.strftime("%Y-%m-%d"),
-                                hour=dt.hour,
-                                model_source=m_short,
-                                temperature=h[t_col][i],
-                                apparent_temperature=h[app_col][i] if app_col in h else None,
-                                precipitation=h[precip_col][i] if precip_col in h else None,
-                                cloud_cover=h[cloud_col][i] if cloud_col in h else None,
-                                wind_speed=h[wind_col][i] if wind_col in h else None,
-                                uv_index=h[uv_col][i] if uv_col in h else None
+                    for m_key in MODELS:
+                        m_short = m_key.split("_")[0]
+                        t_col = f"temperature_2m_{m_key}"
+                        app_col = f"apparent_temperature_{m_key}"
+                        precip_col = f"precipitation_{m_key}"
+                        cloud_col = f"cloud_cover_{m_key}"
+                        wind_col = f"wind_speed_10m_{m_key}"
+                        uv_col = f"uv_index_{m_key}"
+
+                        if t_col in h:
+                            for i, t_str in enumerate(time_list):
+                                dt = datetime.datetime.fromisoformat(t_str)
+                                all_raw_records.append(WeatherRecord(
+                                    timestamp=dt,
+                                    date_str=dt.strftime("%Y-%m-%d"),
+                                    hour=dt.hour,
+                                    model_source=m_short,
+                                    location_id=loc_id,
+                                    location_name=loc_info['name'],
+                                    temperature=h[t_col][i],
+                                    apparent_temperature=h[app_col][i] if app_col in h else None,
+                                    precipitation=h[precip_col][i] if precip_col in h else None,
+                                    cloud_cover=h[cloud_col][i] if cloud_col in h else None,
+                                    wind_speed=h[wind_col][i] if wind_col in h else None,
+                                    uv_index=h[uv_col][i] if uv_col in h else None
+                                ))
+
+                sst_map = {}
+                if marine_raw and 'hourly' in marine_raw:
+                    m_h = marine_raw['hourly']
+                    for i, t_str in enumerate(m_h['time']):
+                        sst_map[t_str] = m_h['sea_surface_temperature'][i]
+
+                dates = [f"2026-08-{d:02d}" for d in range(16, 31)]
+                day_labels = {
+                    "2026-08-16": "Dim 16 août", "2026-08-17": "Lun 17 août", "2026-08-18": "Mar 18 août",
+                    "2026-08-19": "Mer 19 août", "2026-08-20": "Jeu 20 août", "2026-08-21": "Ven 21 août",
+                    "2026-08-22": "Sam 22 août", "2026-08-23": "Dim 23 août", "2026-08-24": "Lun 24 août",
+                    "2026-08-25": "Mar 25 août", "2026-08-26": "Mer 26 août", "2026-08-27": "Jeu 27 août",
+                    "2026-08-28": "Ven 28 août", "2026-08-29": "Sam 29 août", "2026-08-30": "Dim 30 août",
+                }
+
+                blocks = [
+                    ("Matin", list(range(8, 13))),
+                    ("Après-midi", list(range(13, 19))),
+                    ("Soir", list(range(19, 24)))
+                ]
+
+                for date_str in dates:
+                    d_num = int(date_str.split("-")[-1])
+                    is_deterministic = d_num <= 26
+
+                    block_scores = []
+                    pm_summary_data = {}
+
+                    for b_name, hours in blocks:
+                        if is_deterministic:
+                            # Select records filtered by location_id
+                            recs = [r for r in all_raw_records if r.location_id == loc_id and r.date_str == date_str and r.hour in hours]
+
+                            by_model_t, by_model_app, by_model_cloud, by_model_wind, by_model_rain = {}, {}, {}, {}, {}
+                            for r in recs:
+                                m = r.model_source
+                                if r.temperature is not None:
+                                    by_model_t.setdefault(m, []).append(r.temperature)
+                                if r.apparent_temperature is not None:
+                                    by_model_app.setdefault(m, []).append(r.apparent_temperature)
+                                if r.cloud_cover is not None:
+                                    by_model_cloud.setdefault(m, []).append(r.cloud_cover)
+                                if r.wind_speed is not None:
+                                    by_model_wind.setdefault(m, []).append(r.wind_speed)
+                                if r.precipitation is not None:
+                                    by_model_rain.setdefault(m, []).append(r.precipitation)
+
+                            m_avg_t = {m: sum(v)/len(v) for m, v in by_model_t.items() if v}
+                            m_avg_app = {m: sum(v)/len(v) for m, v in by_model_app.items() if v}
+                            m_avg_cloud = {m: sum(v)/len(v) for m, v in by_model_cloud.items() if v}
+                            m_avg_wind = {m: sum(v)/len(v) for m, v in by_model_wind.items() if v}
+                            m_sum_rain = {m: sum(v) for m, v in by_model_rain.items() if v}
+
+                            avg_t = weighted_mean(m_avg_t) or (24.0 if loc_id == "soustons-plage" else 27.5)
+                            avg_app = weighted_mean(m_avg_app) or (25.5 if loc_id == "soustons-plage" else 29.0)
+                            avg_cloud = weighted_mean(m_avg_cloud) or 25.0
+                            avg_wind = weighted_mean(m_avg_wind) or 10.0
+                            sum_rain = weighted_mean(m_sum_rain) or 0.0
+
+                            eff_uv = calculate_effective_uv(avg_cloud, sum_rain, is_afternoon=(b_name == "Après-midi"))
+
+                            sst_vals = [sst_map.get(f"{date_str}T{h:02d}:00") for h in hours if f"{date_str}T{h:02d}:00" in sst_map]
+                            sst_vals = [v for v in sst_vals if v is not None]
+                            avg_sst = (sum(sst_vals) / len(sst_vals)) if sst_vals else (23.5 if loc_id == "soustons-plage" else 24.8)
+
+                            score = compute_vacation_score(avg_cloud, sum_rain, avg_t)
+                            block_scores.append(score)
+
+                            if b_name == "Après-midi":
+                                pm_summary_data = {
+                                    "app": avg_app,
+                                    "cloud": avg_cloud,
+                                    "uv": eff_uv,
+                                    "sst": avg_sst
+                                }
+
+                            all_aggregated_records.append(AggregatedForecast(
+                                location_id=loc_id,
+                                location_name=loc_info['name'],
+                                date_str=date_str,
+                                day_label=day_labels[date_str],
+                                time_block=b_name,
+                                vacation_score=score,
+                                vacation_rating=get_rating_label(score),
+                                temperature=round(avg_t, 1),
+                                apparent_temperature=round(avg_app, 1),
+                                precipitation=round(sum_rain, 1),
+                                cloud_cover=round(avg_cloud, 0),
+                                wind_speed=round(avg_wind, 1),
+                                uv_index=eff_uv,
+                                sea_temperature=round(avg_sst, 1),
+                                confidence="Moyenne Pondérée (ECMWF 60%, GFS 20%, ICON/Météo-France 20%)",
+                                data_source_label="Pondération Haute Précision ECMWF Européenne"
                             ))
 
-            sst_map = {}
-            if marine_raw and 'hourly' in marine_raw:
-                m_h = marine_raw['hourly']
-                for i, t_str in enumerate(m_h['time']):
-                    sst_map[t_str] = m_h['sea_surface_temperature'][i]
+                        else:
+                            clim_t, clim_app, clim_c, clim_w, clim_p = [], [], [], [], []
+                            for yr, c_data in clim_raw:
+                                if 'hourly' in c_data:
+                                    c_map = {t_val: idx for idx, t_val in enumerate(c_data['hourly']['time'])}
+                                    mm_dd = date_str[5:]
+                                    c_idxs = [c_map[f"{yr}-{mm_dd}T{h:02d}:00"] for h in hours if f"{yr}-{mm_dd}T{h:02d}:00" in c_map]
+                                    for ci in c_idxs:
+                                        if c_data['hourly']['temperature_2m'][ci] is not None:
+                                            clim_t.append(c_data['hourly']['temperature_2m'][ci])
+                                        if c_data['hourly']['apparent_temperature'][ci] is not None:
+                                            clim_app.append(c_data['hourly']['apparent_temperature'][ci])
+                                        if c_data['hourly']['cloud_cover'][ci] is not None:
+                                            clim_c.append(c_data['hourly']['cloud_cover'][ci])
+                                        if c_data['hourly']['wind_speed_10m'][ci] is not None:
+                                            clim_w.append(c_data['hourly']['wind_speed_10m'][ci])
+                                        if c_data['hourly']['precipitation'][ci] is not None:
+                                            clim_p.append(c_data['hourly']['precipitation'][ci])
 
-            session.add_all(records_to_add)
+                            avg_t = (sum(clim_t) / len(clim_t)) if clim_t else (23.5 if loc_id == "soustons-plage" else 26.5)
+                            avg_app = (sum(clim_app) / len(clim_app)) if clim_app else (24.2 if loc_id == "soustons-plage" else 27.8)
+                            avg_cloud = (sum(clim_c) / len(clim_c)) if clim_c else 35.0
+                            avg_wind = (sum(clim_w) / len(clim_w)) if clim_w else 12.0
+                            sum_rain = (sum(clim_p) / len(clim_raw)) if clim_raw else 0.2
+
+                            eff_uv = calculate_effective_uv(avg_cloud, sum_rain, is_afternoon=(b_name == "Après-midi"))
+                            score = compute_vacation_score(avg_cloud, sum_rain, avg_t)
+                            block_scores.append(score)
+
+                            if b_name == "Après-midi":
+                                pm_summary_data = {
+                                    "app": avg_app,
+                                    "cloud": avg_cloud,
+                                    "uv": eff_uv,
+                                    "sst": 22.0 if loc_id == "soustons-plage" else 23.5
+                                }
+
+                            all_aggregated_records.append(AggregatedForecast(
+                                location_id=loc_id,
+                                location_name=loc_info['name'],
+                                date_str=date_str,
+                                day_label=day_labels[date_str],
+                                time_block=b_name,
+                                vacation_score=score,
+                                vacation_rating=get_rating_label(score),
+                                temperature=round(avg_t, 1),
+                                apparent_temperature=round(avg_app, 1),
+                                precipitation=round(sum_rain, 1),
+                                cloud_cover=round(avg_cloud, 0),
+                                wind_speed=round(avg_wind, 1),
+                                uv_index=eff_uv,
+                                sea_temperature=21.8 if loc_id == "soustons-plage" else 23.0,
+                                confidence="Climatologie 5 ans (2021-2025)",
+                                data_source_label="Tendance Climatologique Historique"
+                            ))
+
+                    daily_score = round(sum(block_scores) / len(block_scores)) if block_scores else 5
+                    all_aggregated_records.append(AggregatedForecast(
+                        location_id=loc_id,
+                        location_name=loc_info['name'],
+                        date_str=date_str,
+                        day_label=day_labels[date_str],
+                        time_block="Journée",
+                        vacation_score=daily_score,
+                        vacation_rating=get_rating_label(daily_score),
+                        temperature=None,
+                        apparent_temperature=round(pm_summary_data.get("app", 25.0), 1),
+                        cloud_cover=round(pm_summary_data.get("cloud", 25.0), 0),
+                        uv_index=round(pm_summary_data.get("uv", 5.5), 1),
+                        sea_temperature=round(pm_summary_data.get("sst", 23.5), 1),
+                        confidence="Moyenne Pondérée Référente (ECMWF 60%, GFS 20%, ICON/Météo-France 20%)",
+                        data_source_label="Synthèse d'Ensemble Haute Précision"
+                    ))
+
+            session.add_all(all_raw_records)
+            session.add_all(all_aggregated_records)
             await session.commit()
-
-            dates = [f"2026-08-{d:02d}" for d in range(16, 31)]
-            day_labels = {
-                "2026-08-16": "Dim 16 août", "2026-08-17": "Lun 17 août", "2026-08-18": "Mar 18 août",
-                "2026-08-19": "Mer 19 août", "2026-08-20": "Jeu 20 août", "2026-08-21": "Ven 21 août",
-                "2026-08-22": "Sam 22 août", "2026-08-23": "Dim 23 août", "2026-08-24": "Lun 24 août",
-                "2026-08-25": "Mar 25 août", "2026-08-26": "Mer 26 août", "2026-08-27": "Jeu 27 août",
-                "2026-08-28": "Ven 28 août", "2026-08-29": "Sam 29 août", "2026-08-30": "Dim 30 août",
-            }
-
-            blocks = [
-                ("Matin", list(range(8, 13))),
-                ("Après-midi", list(range(13, 19))),
-                ("Soir", list(range(19, 24)))
-            ]
-
-            aggregated_records = []
-
-            for date_str in dates:
-                d_num = int(date_str.split("-")[-1])
-                is_deterministic = d_num <= 26
-
-                block_scores = []
-                pm_summary_data = {}
-
-                for b_name, hours in blocks:
-                    if is_deterministic:
-                        stmt = select(WeatherRecord).where(
-                            WeatherRecord.date_str == date_str,
-                            WeatherRecord.hour.in_(hours)
-                        )
-                        res = await session.execute(stmt)
-                        recs = res.scalars().all()
-
-                        by_model_t, by_model_app, by_model_cloud, by_model_wind, by_model_rain = {}, {}, {}, {}, {}
-                        for r in recs:
-                            m = r.model_source
-                            if r.temperature is not None:
-                                by_model_t.setdefault(m, []).append(r.temperature)
-                            if r.apparent_temperature is not None:
-                                by_model_app.setdefault(m, []).append(r.apparent_temperature)
-                            if r.cloud_cover is not None:
-                                by_model_cloud.setdefault(m, []).append(r.cloud_cover)
-                            if r.wind_speed is not None:
-                                by_model_wind.setdefault(m, []).append(r.wind_speed)
-                            if r.precipitation is not None:
-                                by_model_rain.setdefault(m, []).append(r.precipitation)
-
-                        m_avg_t = {m: sum(v)/len(v) for m, v in by_model_t.items() if v}
-                        m_avg_app = {m: sum(v)/len(v) for m, v in by_model_app.items() if v}
-                        m_avg_cloud = {m: sum(v)/len(v) for m, v in by_model_cloud.items() if v}
-                        m_avg_wind = {m: sum(v)/len(v) for m, v in by_model_wind.items() if v}
-                        m_sum_rain = {m: sum(v) for m, v in by_model_rain.items() if v}
-
-                        avg_t = weighted_mean(m_avg_t) or 24.0
-                        avg_app = weighted_mean(m_avg_app) or 25.5
-                        avg_cloud = weighted_mean(m_avg_cloud) or 25.0
-                        avg_wind = weighted_mean(m_avg_wind) or 10.0
-                        sum_rain = weighted_mean(m_sum_rain) or 0.0
-
-                        eff_uv = calculate_effective_uv(avg_cloud, sum_rain, is_afternoon=(b_name == "Après-midi"))
-
-                        sst_vals = [sst_map.get(f"{date_str}T{h:02d}:00") for h in hours if f"{date_str}T{h:02d}:00" in sst_map]
-                        sst_vals = [v for v in sst_vals if v is not None]
-                        avg_sst = (sum(sst_vals) / len(sst_vals)) if sst_vals else 23.5
-
-                        score = compute_vacation_score(avg_cloud, sum_rain, avg_t)
-                        block_scores.append(score)
-
-                        if b_name == "Après-midi":
-                            pm_summary_data = {
-                                "app": avg_app,
-                                "cloud": avg_cloud,
-                                "uv": eff_uv,
-                                "sst": avg_sst
-                            }
-
-                        aggregated_records.append(AggregatedForecast(
-                            date_str=date_str,
-                            day_label=day_labels[date_str],
-                            time_block=b_name,
-                            vacation_score=score,
-                            vacation_rating=get_rating_label(score),
-                            temperature=round(avg_t, 1),
-                            apparent_temperature=round(avg_app, 1),
-                            precipitation=round(sum_rain, 1),
-                            cloud_cover=round(avg_cloud, 0),
-                            wind_speed=round(avg_wind, 1),
-                            uv_index=eff_uv,
-                            sea_temperature=round(avg_sst, 1),
-                            confidence="Moyenne Pondérée (ECMWF 60%, GFS 20%, ICON/Météo-France 20%)",
-                            data_source_label="Pondération Haute Précision ECMWF Européenne"
-                        ))
-
-                    else:
-                        clim_t, clim_app, clim_c, clim_w, clim_p = [], [], [], [], []
-                        for yr, c_data in clim_raw:
-                            if 'hourly' in c_data:
-                                c_map = {t_val: idx for idx, t_val in enumerate(c_data['hourly']['time'])}
-                                mm_dd = date_str[5:]
-                                c_idxs = [c_map[f"{yr}-{mm_dd}T{h:02d}:00"] for h in hours if f"{yr}-{mm_dd}T{h:02d}:00" in c_map]
-                                for ci in c_idxs:
-                                    if c_data['hourly']['temperature_2m'][ci] is not None:
-                                        clim_t.append(c_data['hourly']['temperature_2m'][ci])
-                                    if c_data['hourly']['apparent_temperature'][ci] is not None:
-                                        clim_app.append(c_data['hourly']['apparent_temperature'][ci])
-                                    if c_data['hourly']['cloud_cover'][ci] is not None:
-                                        clim_c.append(c_data['hourly']['cloud_cover'][ci])
-                                    if c_data['hourly']['wind_speed_10m'][ci] is not None:
-                                        clim_w.append(c_data['hourly']['wind_speed_10m'][ci])
-                                    if c_data['hourly']['precipitation'][ci] is not None:
-                                        clim_p.append(c_data['hourly']['precipitation'][ci])
-
-                        avg_t = (sum(clim_t) / len(clim_t)) if clim_t else 23.5
-                        avg_app = (sum(clim_app) / len(clim_app)) if clim_app else 24.2
-                        avg_cloud = (sum(clim_c) / len(clim_c)) if clim_c else 35.0
-                        avg_wind = (sum(clim_w) / len(clim_w)) if clim_w else 12.0
-                        sum_rain = (sum(clim_p) / len(clim_raw)) if clim_raw else 0.2
-
-                        eff_uv = calculate_effective_uv(avg_cloud, sum_rain, is_afternoon=(b_name == "Après-midi"))
-                        score = compute_vacation_score(avg_cloud, sum_rain, avg_t)
-                        block_scores.append(score)
-
-                        if b_name == "Après-midi":
-                            pm_summary_data = {
-                                "app": avg_app,
-                                "cloud": avg_cloud,
-                                "uv": eff_uv,
-                                "sst": 22.0
-                            }
-
-                        aggregated_records.append(AggregatedForecast(
-                            date_str=date_str,
-                            day_label=day_labels[date_str],
-                            time_block=b_name,
-                            vacation_score=score,
-                            vacation_rating=get_rating_label(score),
-                            temperature=round(avg_t, 1),
-                            apparent_temperature=round(avg_app, 1),
-                            precipitation=round(sum_rain, 1),
-                            cloud_cover=round(avg_cloud, 0),
-                            wind_speed=round(avg_wind, 1),
-                            uv_index=eff_uv,
-                            sea_temperature=21.8,
-                            confidence="Climatologie 5 ans (2021-2025)",
-                            data_source_label="Tendance Climatologique Historique"
-                        ))
-
-                daily_score = round(sum(block_scores) / len(block_scores)) if block_scores else 5
-                aggregated_records.append(AggregatedForecast(
-                    date_str=date_str,
-                    day_label=day_labels[date_str],
-                    time_block="Journée",
-                    vacation_score=daily_score,
-                    vacation_rating=get_rating_label(daily_score),
-                    temperature=None,
-                    apparent_temperature=round(pm_summary_data.get("app", 25.0), 1),
-                    cloud_cover=round(pm_summary_data.get("cloud", 25.0), 0),
-                    uv_index=round(pm_summary_data.get("uv", 5.5), 1),
-                    sea_temperature=round(pm_summary_data.get("sst", 23.5), 1),
-                    confidence="Moyenne Pondérée Référente (ECMWF 60%, GFS 20%, ICON/Météo-France 20%)",
-                    data_source_label="Synthèse d'Ensemble Haute Précision"
-                ))
-
-            session.add_all(aggregated_records)
-            await session.commit()
-            print("✅ Ingestion & Weighted Ensemble Aggregation Complete with Zero Duplicates!")
+            print("✅ Multi-Location Ingestion Complete for Soustons-Plage and Canet-en-Roussillon-Plage!")

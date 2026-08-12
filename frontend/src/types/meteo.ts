@@ -8,6 +8,8 @@ export interface VacationSummaryItem {
   uv_index: string;
   rating: string;
   confidence: string;
+  location_id?: string;
+  location_name?: string;
 }
 
 export interface BlockDetail {
@@ -27,9 +29,23 @@ export interface BlockDetail {
 export interface DailyDetailResponse {
   date: string;
   day_label: string;
+  location_id?: string;
+  location_name?: string;
   blocks: {
-    Matin?: BlockDetail;
-    'Après-midi'?: BlockDetail;
-    Soir?: BlockDetail;
+    "Matin"?: BlockDetail;
+    "Après-midi"?: BlockDetail;
+    "Soir"?: BlockDetail;
   };
+}
+
+export interface LocationInfo {
+  id: string;
+  name: string;
+  region: string;
+  lat: number;
+  lon: number;
+  avg_score: number;
+  avg_sea_temp: number;
+  top_days: number;
+  total_days: number;
 }
